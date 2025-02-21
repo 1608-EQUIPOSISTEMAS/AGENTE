@@ -1,15 +1,26 @@
-const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
-const qrcode = require('qrcode-terminal');
-const xlsx = require('xlsx');
-const fs = require('fs');
 const express = require('express');
-const qrImage = require('qr-image');
+const path = require('path');
+const fs = require('fs');
+const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
+const qrcode = require('qrcode');
+const xlsx = require('xlsx');
 
+// 🔹 Configurar el servidor Express
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
 
-// Servir archivos estáticos desde la carpeta `public`
-app.use(express.static('public'));
+// 📂 Crear la carpeta `public/` si no existe
+if (!fs.existsSync('./public')) {
+    fs.mkdirSync('./public', { recursive: true });
+}
+
+// 📌 Servir archivos estáticos desde la carpeta `public`
+app.use('/public', express.static(path.join(__dirname, 'public')));
+
+// 🔹 Ruta para ver el QR en el navegador
+app.get('/qr', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'qrcode.png'));
+});
 
 // 🔹 Configurar el cliente de WhatsApp
 const client = new Client({
@@ -25,7 +36,7 @@ const workbook = xlsx.readFile('SEGUIMIENTO.xlsx');
 const sheetName = workbook.SheetNames[0];
 const data = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName], { raw: false });
 
-// 🔹 Función para convertir fechas correctamente en formato DÍA/MES/AÑO
+// 🔹 Función para formatear fechas correctamente
 const formatoFecha = (valor) => {
     if (!valor) return "Fecha no disponible";
     let date = new Date(valor);
@@ -35,11 +46,9 @@ const formatoFecha = (valor) => {
            `${date.getFullYear()}`;
 };
 
-// 🔹 Función para buscar programas y archivos multimedia asociados
+// 🔹 Función para buscar programas y archivos multimedia
 const buscarProximosProgramas = (mensaje) => {
     const hoy = new Date();
-
-    // 📌 Filtrar programas por nombre y fecha
     const programasFiltrados = data
         .filter(row => 
             row.PROGRAMA.toLowerCase().includes(mensaje.toLowerCase()) &&
@@ -64,7 +73,7 @@ const buscarProximosProgramas = (mensaje) => {
                      `⏰ *Horario:* ${programa["HORARIO"]}\n` +
                      `👨‍🏫 *Docentes:* ${programa["Docente"]}\n\n`;
 
-        // 📂 Verificar si el programa tiene una imagen asociada
+        // 📂 Verificar si hay imagen asociada
         if (programa.IMAGEN) {
             let imagenPath = `./media/${programa.IMAGEN}`;
             if (fs.existsSync(imagenPath)) {
@@ -72,7 +81,7 @@ const buscarProximosProgramas = (mensaje) => {
             }
         }
 
-        // 📂 Verificar si el programa tiene un PDF asociado
+        // 📂 Verificar si hay PDF asociado
         if (programa.PDF) {
             let pdfPath = `./media/${programa.PDF}`;
             if (fs.existsSync(pdfPath)) {
@@ -84,22 +93,17 @@ const buscarProximosProgramas = (mensaje) => {
     return { texto: respuesta, imagen, pdf };
 };
 
-// 🔹 Guardar el código QR como imagen para acceder desde Render
-client.on('qr', (qr) => {
+// 🔹 Manejo del código QR
+client.on('qr', async (qr) => {
     console.log('✅ QR generado. Accede a él en tu navegador.');
 
-    // Crear la imagen del QR
-    const qrImg = qrImage.image(qr, { type: 'png' });
-
-    // Guardar el QR en la carpeta `public`
-    const qrPath = './public/qrcode.png';
-    const stream = fs.createWriteStream(qrPath);
-    qrImg.pipe(stream);
-    
-    stream.on('finish', () => {
-        console.log(`🔗 Escanea el QR en: https://tu-app-en-render.com/qrcode.png`);
-    });
+    try {
+        await qrcode.toFile('./public/qrcode.png', qr);
+    } catch (error) {
+        console.error("❌ Error al generar el QR:", error.message);
+    }
 });
+
 
 // 🔹 Confirmar que el bot está listo
 client.on('ready', () => {
@@ -108,14 +112,13 @@ client.on('ready', () => {
 
 // 🔹 Manejar los mensajes entrantes
 client.on('message', async (message) => {
+    
     try {
-        // 🛑 Omitir mensajes de grupos y canales
         if (message.from.includes('@g.us') || message.from.includes('@broadcast')) {
             console.log(`⏩ Mensaje omitido (grupo/canal): ${message.body}`);
             return;
         }
 
-        // 🛑 Omitir mensajes que NO sean de texto
         if (message.type !== 'chat') {
             console.log(`⏩ Mensaje omitido (no es texto): ${message.type}`);
             return;
@@ -123,19 +126,15 @@ client.on('message', async (message) => {
 
         console.log(`📩 Nuevo mensaje de ${message.from}: ${message.body}`);
 
-        // 🔍 Buscar información y archivos multimedia
         const resultado = buscarProximosProgramas(message.body);
 
-        // 📨 Enviar mensaje con información del programa
         await message.reply(resultado.texto);
 
-        // 📷 Enviar imagen si existe
         if (resultado.imagen) {
             const mediaImagen = MessageMedia.fromFilePath(resultado.imagen);
             await client.sendMessage(message.from, mediaImagen);
         }
 
-        // 📄 Enviar PDF si existe
         if (resultado.pdf) {
             const mediaPdf = MessageMedia.fromFilePath(resultado.pdf);
             await client.sendMessage(message.from, mediaPdf);
@@ -149,7 +148,7 @@ client.on('message', async (message) => {
 // 🔹 Iniciar el cliente de WhatsApp
 client.initialize();
 
-// 🔹 Iniciar servidor en Render
+// 🔹 Iniciar el servidor Express
 app.listen(PORT, () => {
     console.log(`🚀 Servidor corriendo en el puerto ${PORT}`);
 });
