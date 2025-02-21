@@ -77,9 +77,11 @@ const buscarProximosProgramas = (mensaje) => {
 };
 
 // 🔹 Escanear el código QR en la terminal
-client.on('qr', (qr) => {
-    console.log('Escanea este QR con WhatsApp:');
-    qrcode.generate(qr, { small: true });
+client.on('qr', qr => {
+    const qrcode = require('qrcode');
+    qrcode.toFile('qr.png', qr, () => {
+        console.log('QR guardado como qr.png');
+    });
 });
 
 // 🔹 Confirmar que el bot está listo
