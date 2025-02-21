@@ -2,6 +2,14 @@ const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const xlsx = require('xlsx');
 const fs = require('fs');
+const express = require('express');
+const qrImage = require('qr-image');
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+// Servir archivos estáticos desde la carpeta `public`
+app.use(express.static('public'));
 
 // 🔹 Configurar el cliente de WhatsApp
 const client = new Client({
@@ -76,10 +84,21 @@ const buscarProximosProgramas = (mensaje) => {
     return { texto: respuesta, imagen, pdf };
 };
 
-// 🔹 Escanear el código QR en la terminal
+// 🔹 Guardar el código QR como imagen para acceder desde Render
 client.on('qr', (qr) => {
-    console.log('Escanea este QR con WhatsApp:');
-    qrcode.generate(qr, { small: true });
+    console.log('✅ QR generado. Accede a él en tu navegador.');
+
+    // Crear la imagen del QR
+    const qrImg = qrImage.image(qr, { type: 'png' });
+
+    // Guardar el QR en la carpeta `public`
+    const qrPath = './public/qrcode.png';
+    const stream = fs.createWriteStream(qrPath);
+    qrImg.pipe(stream);
+    
+    stream.on('finish', () => {
+        console.log(`🔗 Escanea el QR en: https://tu-app-en-render.com/qrcode.png`);
+    });
 });
 
 // 🔹 Confirmar que el bot está listo
@@ -129,3 +148,8 @@ client.on('message', async (message) => {
 
 // 🔹 Iniciar el cliente de WhatsApp
 client.initialize();
+
+// 🔹 Iniciar servidor en Render
+app.listen(PORT, () => {
+    console.log(`🚀 Servidor corriendo en el puerto ${PORT}`);
+});
