@@ -3,7 +3,6 @@ const qrcode = require('qrcode-terminal');
 const xlsx = require('xlsx');
 const fs = require('fs');
 
-// 🔹 Configurar el cliente de WhatsApp
 const client = new Client({
     authStrategy: new LocalAuth(),
     puppeteer: {
@@ -12,12 +11,25 @@ const client = new Client({
     },
 });
 
-// 🔹 Cargar datos desde el archivo Excel
-const workbook = xlsx.readFile('SEGUIMIENTO.xlsx');
-const sheetName = workbook.SheetNames[0];
-const data = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName], { raw: false });
+const seguimientoPath = 'SEGUIMIENTO.xlsx';
+const historialPath = 'HISTORIAL.xlsx';
+const seguimientoWorkbook = xlsx.readFile(seguimientoPath);
+const seguimientoSheet = seguimientoWorkbook.SheetNames[0];
+const seguimientoData = xlsx.utils.sheet_to_json(seguimientoWorkbook.Sheets[seguimientoSheet], { raw: false });
 
-// 🔹 Función para convertir fechas correctamente en formato DÍA/MES/AÑO
+let historialWorkbook, historialSheet, historialData;
+if (fs.existsSync(historialPath)) {
+    historialWorkbook = xlsx.readFile(historialPath);
+    historialSheet = historialWorkbook.SheetNames.includes("HISTORIAL") ? "HISTORIAL" : historialWorkbook.SheetNames[0];
+    historialData = xlsx.utils.sheet_to_json(historialWorkbook.Sheets[historialSheet], { raw: false });
+} else {
+    historialWorkbook = xlsx.utils.book_new();
+    historialSheet = "HISTORIAL";
+    historialData = [];
+    xlsx.utils.book_append_sheet(historialWorkbook, xlsx.utils.json_to_sheet(historialData), historialSheet);
+    xlsx.writeFile(historialWorkbook, historialPath);
+}
+
 const formatoFecha = (valor) => {
     if (!valor) return "Fecha no disponible";
     let date = new Date(valor);
@@ -27,21 +39,29 @@ const formatoFecha = (valor) => {
            `${date.getFullYear()}`;
 };
 
-// 🔹 Función para buscar programas y archivos multimedia asociados
-const buscarProximosProgramas = (mensaje) => {
-    const hoy = new Date();
+// Función para detectar saludo
+const detectarSaludo = (mensaje) => {
+    const saludos = ['hola', 'buenas', 'buenos días', 'buenas tardes', 'buenas noches'];
+    return saludos.some(saludo => mensaje.toLowerCase().includes(saludo));
+};
 
-    // 📌 Filtrar programas por nombre y fecha
-    const programasFiltrados = data
+const buscarProximosProgramas = (mensaje) => {
+    if (!mensaje || typeof mensaje !== 'string') {
+        return { texto: "❌ No encontré programas próximos con ese nombre.", imagen: null, pdf: null, programa: "Desconocido" };
+    }
+    
+    const hoy = new Date();
+    const programasFiltrados = seguimientoData
         .filter(row => 
-            row.PROGRAMA.toLowerCase().includes(mensaje.toLowerCase()) &&
+            row.PROGRAMA && typeof row.PROGRAMA === 'string' &&
+            row.PROGRAMA.toUpperCase().includes(mensaje.toUpperCase()) &&
             row["F. INI PROGRAMA"] && new Date(row["F. INI PROGRAMA"]) >= hoy
         )
         .sort((a, b) => new Date(a["F. INI PROGRAMA"]) - new Date(b["F. INI PROGRAMA"]))
         .slice(0, 2);
 
     if (programasFiltrados.length === 0) {
-        return { texto: "❌ No encontré programas próximos con ese nombre.", imagen: null, pdf: null };
+        return { texto: "❌ No encontré programas próximos con ese nombre.", imagen: null, pdf: null, programa: "Desconocido" };
     }
 
     let respuesta = "📚 *Programas Disponibles Próximamente*\n\n";
@@ -49,84 +69,85 @@ const buscarProximosProgramas = (mensaje) => {
     let pdf = null;
 
     programasFiltrados.forEach((programa, index) => {
+        
         respuesta += `🔹 *Opción ${index + 1}:*\n` +
-                     `📌 *Programa:* ${programa.PROGRAMA}\n` +
-                     `📆 *Inicio:* ${formatoFecha(programa["F. INI PROGRAMA"])}\n` +
-                     `📅 *Días:* ${programa["DIAS CLASE"]}\n` +
-                     `⏰ *Horario:* ${programa["HORARIO"]}\n` +
-                     `👨‍🏫 *Docentes:* ${programa["Docente"]}\n\n`;
+        `📌 *Programa:* ${programa.PROGRAMA}\n` +
+        `📆 *Inicio:* ${formatoFecha(programa["F. INI PROGRAMA"])}` +
+        `\n📅 *Días:* ${programa["DIAS CLASE"]}\n` +
+        `⏰ *Horario:* ${programa["HORARIO"]}\n` +
+        `👨‍🏫 *Docentes:* ${programa["Docente"]}\n\n`;
 
-        // 📂 Verificar si el programa tiene una imagen asociada
         if (programa.IMAGEN) {
             let imagenPath = `./media/${programa.IMAGEN}`;
             if (fs.existsSync(imagenPath)) {
                 imagen = imagenPath;
             }
         }
-
-        // 📂 Verificar si el programa tiene un PDF asociado
-        if (programa.PDF) {
-            let pdfPath = `./media/${programa.PDF}`;
+        if (programa.PDF && programa.CATEGORIA) {
+            let pdfPath = `./media/pdfs/${programa.CATEGORIA}/${programa.PDF}`;
             if (fs.existsSync(pdfPath)) {
                 pdf = pdfPath;
             }
         }
     });
 
-    return { texto: respuesta, imagen, pdf };
+    return { texto: respuesta, imagen, pdf, programa: programasFiltrados[0]?.PROGRAMA || "Desconocido" };
 };
 
-// 🔹 Escanear el código QR directamente en la terminal
+const guardarConsulta = (numero, mensaje, programa) => {
+    const index = historialData.findIndex(entry => entry.Numero === numero);
+    if (index === -1) {
+        historialData.push({ Numero: numero, Mensaje: mensaje, Programa: programa });
+    } else {
+        historialData[index].Programa = programa;
+    }
+    const worksheet = xlsx.utils.json_to_sheet(historialData);
+    historialWorkbook.Sheets[historialSheet] = worksheet;
+    xlsx.writeFile(historialWorkbook, historialPath);
+};
+
 client.on('qr', (qr) => {
-    console.log('✅ Escanea este QR con WhatsApp Web:');
+    console.log('Escanea este QR con WhatsApp:');
     qrcode.generate(qr, { small: true });
-    console.log('\n🔗 También puedes abrir WhatsApp Web manualmente: https://web.whatsapp.com/');
 });
 
-// 🔹 Confirmar que el bot está listo
 client.on('ready', () => {
     console.log('✅ Bot de WhatsApp está listo para usar.');
 });
 
-// 🔹 Manejar los mensajes entrantes
 client.on('message', async (message) => {
     try {
-        // 🛑 Omitir mensajes de grupos y canales
-        if (message.from.includes('@g.us') || message.from.includes('@broadcast')) {
-            console.log(`⏩ Mensaje omitido (grupo/canal): ${message.body}`);
+        if (message.from.includes('@g.us') || message.from.includes('@broadcast')) return;
+        if (message.type !== 'chat') return;
+
+        console.log(`📩 Nuevo mensaje de ${message.from}:`, message.body);
+
+        const mensaje = message.body.toLowerCase().trim();
+
+        // Detectar saludo
+        if (detectarSaludo(mensaje)) {
+            await message.reply("👋 ¡Hola! Soy tu asistente virtual. ¿Cómo puedo ayudarte hoy?");
             return;
         }
 
-        // 🛑 Omitir mensajes que NO sean de texto
-        if (message.type !== 'chat') {
-            console.log(`⏩ Mensaje omitido (no es texto): ${message.type}`);
-            return;
-        }
-
-        console.log(`📩 Nuevo mensaje de ${message.from}: ${message.body}`);
-
-        // 🔍 Buscar información y archivos multimedia
         const resultado = buscarProximosProgramas(message.body);
+        console.log("🔍 Resultado de la búsqueda:", resultado);
 
-        // 📨 Enviar mensaje con información del programa
+        guardarConsulta(message.from, message.body, resultado.programa);
+
+        await message.reply("👋 ¡Hola! Soy tu asistente virtual. Aquí tienes la información:");
         await message.reply(resultado.texto);
-
-        // 📷 Enviar imagen si existe
         if (resultado.imagen) {
             const mediaImagen = MessageMedia.fromFilePath(resultado.imagen);
             await client.sendMessage(message.from, mediaImagen);
         }
-
-        // 📄 Enviar PDF si existe
         if (resultado.pdf) {
             const mediaPdf = MessageMedia.fromFilePath(resultado.pdf);
             await client.sendMessage(message.from, mediaPdf);
         }
-
     } catch (error) {
         console.error('❌ Error en el manejo del mensaje:', error.message);
     }
 });
 
-// 🔹 Iniciar el cliente de WhatsApp
 client.initialize();
